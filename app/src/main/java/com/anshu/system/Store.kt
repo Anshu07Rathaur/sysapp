@@ -61,8 +61,37 @@ object Store {
     fun setBalance(c: Context, v: Long) = sp(c).edit().putLong("bal", maxOf(0L, v)).apply()
     fun penalty(c: Context): Int = sp(c).getInt("pen", 0)
     private fun setPenalty(c: Context, v: Int) = sp(c).edit().putInt("pen", v).apply()
-    fun blocked(c: Context): Set<String> = sp(c).getStringSet("blk", emptySet()) ?: emptySet()
-    fun setBlocked(c: Context, s: Set<String>) = sp(c).edit().putStringSet("blk", HashSet(s)).apply()
+    private fun rawBlocked(c: Context): Set<String> = sp(c).getStringSet("blk", emptySet()) ?: emptySet()
+
+    /** pkg -> kab unblock hoga (epoch ms). Request ke 24 ghante baad. */
+    fun pending(c: Context): Map<String, Long> {
+        val o = JSONObject(sp(c).getString("unb", "{}") ?: "{}")
+        return o.keys().asSequence().associateWith { o.getLong(it) }
+    }
+
+    private fun setPending(c: Context, m: Map<String, Long>) {
+        val o = JSONObject()
+        m.forEach { (k, v) -> o.put(k, v) }
+        sp(c).edit().putString("unb", o.toString()).apply()
+    }
+
+    /** Abhi jo apps actually blocked hain (unblock wait wale bhi blocked rehte hain). */
+    fun blocked(c: Context): Set<String> {
+        val now = System.currentTimeMillis()
+        val p = pending(c)
+        return rawBlocked(c).filter { (p[it] ?: Long.MAX_VALUE) > now }.toSet()
+    }
+
+    fun addBlock(c: Context, pkg: String) {
+        sp(c).edit().putStringSet("blk", HashSet(rawBlocked(c) + pkg)).apply()
+        setPending(c, pending(c) - pkg)
+    }
+
+    fun requestUnblock(c: Context, pkg: String) {
+        setPending(c, pending(c) + (pkg to System.currentTimeMillis() + 24 * 3600000L))
+    }
+
+    fun cancelUnblock(c: Context, pkg: String) = setPending(c, pending(c) - pkg)
 
     /** Deadline nikal gaya => FAILED + penalty. 7 din purana data delete. */
     fun settle(c: Context) {
@@ -79,6 +108,12 @@ object Store {
         val cut = now - 7 * 86400000L
         if (l.removeAll { it.deadline < cut }) changed = true
         if (changed) { setPenalty(c, pen); save(c, l) }
+        val p = pending(c)
+        val done = p.filter { it.value <= now }.keys
+        if (done.isNotEmpty()) {
+            sp(c).edit().putStringSet("blk", HashSet(rawBlocked(c) - done)).apply()
+            setPending(c, p - done)
+        }
     }
 
     fun add(c: Context, t: String, date: String, dl: Long, r: Int, p: Int) {

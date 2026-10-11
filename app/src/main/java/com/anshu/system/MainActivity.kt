@@ -97,7 +97,7 @@ fun App() {
                             }
                         }
                     }
-                    else -> SetupTab(c)
+                    else -> SetupTab(c, tick) { tick++ }
                 }
             }
         }
@@ -184,7 +184,7 @@ fun AddDialog(onDismiss: () -> Unit, onAdd: (String, Int, Int, Int) -> Unit) {
 }
 
 @Composable
-fun SetupTab(c: Context) {
+fun SetupTab(c: Context, tick: Int, refresh: () -> Unit) {
     val apps = remember {
         val pm = c.packageManager
         pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
@@ -193,7 +193,9 @@ fun SetupTab(c: Context) {
             .filter { it.first != c.packageName }
             .sortedBy { it.second.lowercase() }
     }
-    var blk by remember { mutableStateOf(Store.blocked(c)) }
+    val blk = remember(tick) { Store.blocked(c) }
+    val pend = remember(tick) { Store.pending(c) }
+    val now = System.currentTimeMillis()
     LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         item {
             Button(modifier = Modifier.fillMaxWidth(), onClick = {
@@ -214,13 +216,21 @@ fun SetupTab(c: Context) {
         items(apps, key = { it.first }) { (pkg, name) ->
             Row(
                 Modifier.fillMaxWidth().clickable {
-                    blk = if (pkg in blk) blk - pkg else blk + pkg
-                    Store.setBlocked(c, blk)
+                    if (pkg !in blk) Store.addBlock(c, pkg)
+                    else if (pend.containsKey(pkg)) Store.cancelUnblock(c, pkg)
+                    else {
+                        Store.requestUnblock(c, pkg)
+                        Toast.makeText(c, "24 ghante baad unblock hoga", Toast.LENGTH_LONG).show()
+                    }
+                    refresh()
                 },
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Checkbox(checked = pkg in blk, onCheckedChange = null)
-                Text(name, modifier = Modifier.padding(start = 8.dp))
+                Text(
+                    name + (pend[pkg]?.takeIf { pkg in blk }?.let { "\n🔓 ${fmt(it - now)} baad unblock (tap = cancel)" } ?: ""),
+                    modifier = Modifier.padding(start = 8.dp)
+                )
             }
         }
     }
